@@ -1,0 +1,87 @@
+pipeline {
+    agent any
+
+    tools {
+        jdk 'jdk17'
+        nodejs 'node23'
+    }
+
+    environment {
+        SCANNER_HOME = tool 'sonar-scanner'
+    }
+
+    stages {
+        stage("Clean Workspace") {
+            steps {
+                cleanWs()
+            }
+        }
+
+        stage("Git Checkout") {
+            steps {
+                git 'https://github.com/KastroVKiran/Zomato-Project-Kastro.git'
+            }
+        }
+
+        stage("SonarQube Analysis") {
+            steps {
+                withSonarQubeEnv('sonar-server') {
+                    sh ''' 
+                    $SCANNER_HOME/bin/sonar-scanner -Dsonar.projectName=zomato-app \
+                    -Dsonar.projectKey=zomato-app 
+                    '''
+                }
+            }
+        }
+
+        stage("Code Quality Gate") {
+            steps {
+                script {
+                    waitForQualityGate abortPipeline: false, credentialsId: 'sonar-token'
+                }
+            }
+        }
+
+        stage("Install NPM Dependencies") {
+            steps {
+                sh "npm install"
+            }
+        }
+
+        stage("OWASP FS Scan") {
+            steps {
+                dependencyCheck additionalArguments: '--scan ./ --disableYarnAudit --disableNodeAudit', odcInstallation: 'DP-Check'
+                dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
+            }
+        }
+
+        stage("Trivy File Scan") {
+            steps {
+                sh "trivy fs . > trivy.txt"
+            }
+        }
+
+        stage("Build Docker Image") {
+            steps {
+                sh "docker build -t zomato-app ."
+            }
+        }
+
+        stage("Tag & Push to DockerHub") {
+            steps {
+                script {
+                    withDockerRegistry(credentialsId: 'docker-creds') {
+                        sh "docker tag zomato-app varaprasad372/zomato-app:latest"
+                        sh "docker push varaprasad372/zomato-app:latest"
+                    }
+                }
+            }
+        }
+
+        stage("Deploy to Container") {
+            steps {
+                sh 'docker run -d --name zomato -p 3000:3000 varaprasad372/zomato-app:latest'
+            }
+        }
+    }
+}
